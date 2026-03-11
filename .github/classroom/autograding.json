@@ -3,22 +3,22 @@
     {
       "name": "Flask ORM Routes (Test Client)",
       "setup": "python -m pip install --upgrade pip && pip install -r requirements.txt",
-      "run": "pytest -q tests/test_exercise_routes.py",
-      "input": "",
-      "output": "",
-      "comparison": "included",
-      "timeout": 15,
-      "points": 40
-    },
-    {
-      "name": "Exercises (ORM fundamentals)",
-      "setup": "python -m pip install --upgrade pip && pip install -r requirements.txt",
-      "run": "pytest -q tests/test_exercises.py",
+      "run": "pytest -q tests/test_migration_routes.py",
       "input": "",
       "output": "",
       "comparison": "included",
       "timeout": 15,
       "points": 30
+    },
+    {
+      "name": "Exercises (ORM fundamentals)",
+      "setup": "python -m pip install --upgrade pip && pip install -r requirements.txt",
+      "run": "pytest -q tests/test_routes_after_migrations.py",
+      "input": "",
+      "output": "",
+      "comparison": "included",
+      "timeout": 15,
+      "points": 70
     }
   ]
 }
