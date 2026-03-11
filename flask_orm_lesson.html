@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Flask ORM (SQLAlchemy): Models, Sessions, Queries, Relationships + Pytest</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; line-height: 1.5; padding: 24px; max-width: 980px; margin: 0 auto; }
+        h1, h2, h3 { line-height: 1.2; }
+        .callout { border-left: 5px solid #3b82f6; background: #eff6ff; padding: 12px 14px; margin: 16px 0; border-radius: 8px; }
+        .warn { border-left-color: #f59e0b; background: #fffbeb; }
+        .ok { border-left-color: #10b981; background: #ecfdf5; }
+        pre { background: #0b1020; color: #e5e7eb; padding: 14px; border-radius: 10px; overflow: auto; }
+        code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+        ul, ol { margin-top: 6px; }
+        .small { color: #6b7280; font-size: 0.95em; }
+        table { border-collapse: collapse; width: 100%; margin: 10px 0 18px; }
+        th, td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; vertical-align: top; }
+        th { background: #f9fafb; }
+    </style>
+</head>
+<body>
+
+<h1>Flask ORM with SQLAlchemy + Pytest</h1>
+
+<div class="callout">
+    <strong>Goal:</strong> Use ORM models (tables/classes), relationships (PK/FK), and sessions (transactions) to build a Flask JSON API —
+    and test it with <strong>pytest</strong> using the <strong>Flask test client</strong>.
+    <br/>
+    <span class="small">This lesson reuses earlier DB concepts: tables, constraints, relationships/joins, and commit/rollback.</span>
+</div>
+
+<h2>1) Quick refresher: how ORM maps to database concepts</h2>
+<ul>
+    <li><strong>Models</strong> represent tables (e.g., <code>Student</code>, <code>Assignment</code>, <code>Grade</code>).</li>
+    <li><strong>Columns</strong> represent fields (e.g., <code>email</code>, <code>max_points</code>).</li>
+    <li><strong>Primary keys</strong> become <code>id</code> columns marked <code>primary_key=True</code>.</li>
+    <li><strong>Foreign keys</strong> become <code>db.ForeignKey(...)</code> columns.</li>
+    <li><strong>Relationships</strong> are Python links between tables (e.g., <code>Student.grades</code>, <code>Assignment.grades</code>).</li>
+    <li><strong>Session</strong> is how the ORM tracks changes and performs transactions (<code>commit</code>/<code>rollback</code>).</li>
+</ul>
+
+<div class="callout ok">
+    <strong>Important:</strong> ORM does not remove the need to understand SQL. It automates repetitive work (CRUD + mapping + parameterization),
+    but you still need the underlying DB concepts to debug and design correctly.
+</div>
+
+<h2>2) The app factory pattern (why tests like it)</h2>
+<p>
+    A common Flask best practice is an <strong>app factory</strong>: a function called <code>create_app()</code> that builds and returns a Flask app.
+    This is extremely helpful for testing because each test suite can create an app configured for tests.
+</p>
+
+<pre><code># src/flask_orm/app.py
+def create_app(test_config=None):
+    app = Flask(__name__)
+    app.config.from_mapping(
+        SQLALCHEMY_DATABASE_URI="sqlite:///data/app.db",
+        SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    )
+    if test_config:
+        app.config.update(test_config)
+
+    db.init_app(app)
+    app.register_blueprint(api)
+    return app</code></pre>
+
+<div class="callout">
+    <strong>Testing trick:</strong> In tests, we override the database URL to use <code>sqlite:///:memory:</code> (an in-memory database)
+    so every test run starts clean and runs fast.
+</div>
+
+<h2>3) ORM relationships + constraints (one grade per student per assignment)</h2>
+<p>
+    Here’s the key data rule used in this project:
+</p>
+<ul>
+    <li>One <strong>Student</strong> can have many <strong>Grades</strong></li>
+    <li>One <strong>Assignment</strong> can have many <strong>Grades</strong></li>
+    <li>But a student can only have <strong>one grade per assignment</strong></li>
+</ul>
+
+<pre><code># Grade model has a UNIQUE constraint on (student_id, assignment_id)
+__table_args__ = (
+    db.UniqueConstraint("student_id", "assignment_id", name="uq_grade_student_assignment"),
+)</code></pre>
+
+<p>
+    In your API, that means “posting the same student+assignment grade twice” should return an error (we use HTTP 409 Conflict).
+</p>
+
+<h2>4) Testing Flask routes with pytest + Flask test client</h2>
+<p>
+    The <strong>Flask test client</strong> calls your routes without starting a server.
+    Think of it as Postman that runs inside your test code.
+</p>
+
+<div class="callout ok">
+    <strong>Why we test this way:</strong>
+    <ul>
+        <li>Fast feedback (seconds, not minutes)</li>
+        <li>Repeatable (every student runs the same test suite)</li>
+        <li>Perfect for autograding (GitHub Classroom)</li>
+        <li>Encourages clean design (app factory + dependency injection via config)</li>
+    </ul>
+</div>
+
+<h3>4.1 Install and run</h3>
+<pre><code>pip install -r requirements.txt
+pytest -q</code></pre>
+
+<h3>4.2 Basic pytest fixtures: app + client</h3>
+<p>
+    Fixtures are reusable setup functions. We’ll build:
+</p>
+<ul>
+    <li><code>app</code> fixture: creates the Flask app configured for tests</li>
+    <li><code>client</code> fixture: gives us a test client to call routes</li>
+</ul>
+
+<pre><code>import pytest
+from src.flask_orm.app import create_app
+from src.flask_orm.extensions import db
+
+@pytest.fixture()
+def app():
+    app = create_app({
+        "TESTING": True,
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+    })
+    with app.app_context():
+        db.create_all()           # create tables for this test session
+        yield app                 # provide app to tests
+        db.session.remove()       # cleanup session state
+        db.drop_all()             # drop tables so nothing leaks to other tests
+
+@pytest.fixture()
+def client(app):
+    return app.test_client()</code></pre>
+
+<div class="callout warn">
+    <strong>Common gotcha:</strong> Database operations require an <code>app.app_context()</code>.
+    That’s why we create tables inside the context.
+</div>
+
+<h2>5) Route testing patterns (with detailed examples)</h2>
+
+<h3>5.1 Health check test</h3>
+<pre><code>def test_health(client):
+    res = client.get("/health")
+    assert res.status_code == 200
+    assert res.get_json() == {"status": "ok"}</code></pre>
+
+<h3>5.2 Testing a POST endpoint (create)</h3>
+<p>
+    For JSON APIs, you send JSON using <code>json={...}</code>. Flask parses it into <code>request.get_json()</code>.
+</p>
+
+<pre><code>def test_create_student(client):
+    res = client.post("/students", json={"name": "Ava", "email": "ava@example.com"})
+    assert res.status_code == 201
+
+    body = res.get_json()
+    assert "id" in body
+    assert body["name"] == "Ava"
+    assert body["email"] == "ava@example.com"</code></pre>
+
+<h3>5.3 Testing validation errors (400 Bad Request)</h3>
+<p>
+    If required fields are missing, your API should respond with <code>400</code>.
+</p>
+
+<pre><code>def test_create_student_missing_fields(client):
+    res = client.post("/students", json={"name": "Ava"})
+    assert res.status_code == 400
+    assert "error" in res.get_json()</code></pre>
+
+<h3>5.4 Testing uniqueness constraint behavior (409 Conflict)</h3>
+<pre><code>def test_duplicate_student_email(client):
+    res1 = client.post("/students", json={"name": "Ava", "email": "ava@example.com"})
+    assert res1.status_code == 201
+
+    res2 = client.post("/students", json={"name": "Other", "email": "ava@example.com"})
+    assert res2.status_code == 409
+    assert "error" in res2.get_json()</code></pre>
+
+<h3>5.5 Testing GET list endpoints</h3>
+<pre><code>def test_list_students(client):
+    client.post("/students", json={"name": "Ava", "email": "ava@example.com"})
+    client.post("/students", json={"name": "Noah", "email": "noah@example.com"})
+
+    res = client.get("/students")
+    assert res.status_code == 200
+    data = res.get_json()
+
+    assert isinstance(data, list)
+    assert len(data) == 2</code></pre>
+
+<h3>5.6 Testing GET by id + 404 Not Found</h3>
+<pre><code>def test_get_student_not_found(client):
+    res = client.get("/students/999999")
+    assert res.status_code == 404
+    assert res.get_json()["error"] == "not found"</code></pre>
+
+<h3>5.7 Testing PATCH (update)</h3>
+<pre><code>def test_update_student_name(client):
+    created = client.post("/students", json={"name": "Ava", "email": "ava@example.com"}).get_json()
+    sid = created["id"]
+
+    res = client.patch(f"/students/{sid}", json={"name": "Ava Chen"})
+    assert res.status_code == 200
+    assert res.get_json()["name"] == "Ava Chen"</code></pre>
+
+<h3>5.8 Testing DELETE</h3>
+<pre><code>def test_delete_student(client):
+    sid = client.post("/students", json={"name": "Ava", "email": "ava@example.com"}).get_json()["id"]
+
+    res = client.delete(f"/students/{sid}")
+    assert res.status_code == 204
+
+    # After deletion, GET should be 404
+    res = client.get(f"/students/{sid}")
+    assert res.status_code == 404</code></pre>
+
+<h2>6) Testing nested routes (grades belong to student + assignment)</h2>
+
+<h3>6.1 Setup: create assignment first</h3>
+<pre><code>def test_add_grade_flow(client):
+    # Create assignment
+    a = client.post("/assignments", json={"title": "HW 1", "max_points": 100}).get_json()
+    aid = a["id"]
+
+    # Create student
+    s = client.post("/students", json={"name": "Ava", "email": "ava@example.com"}).get_json()
+    sid = s["id"]
+
+    # Add grade
+    res = client.post(f"/students/{sid}/grades", json={"assignment_id": aid, "score": 95})
+    assert res.status_code == 201
+    g = res.get_json()
+    assert g["student_id"] == sid
+    assert g["assignment_id"] == aid
+    assert g["score"] == 95</code></pre>
+
+<h3>6.2 Duplicate grade (same student + assignment) should fail</h3>
+<pre><code>def test_duplicate_grade_conflict(client):
+    aid = client.post("/assignments", json={"title": "Quiz 1", "max_points": 10}).get_json()["id"]
+    sid = client.post("/students", json={"name": "Ava", "email": "ava@example.com"}).get_json()["id"]
+
+    res1 = client.post(f"/students/{sid}/grades", json={"assignment_id": aid, "score": 9})
+    assert res1.status_code == 201
+
+    res2 = client.post(f"/students/{sid}/grades", json={"assignment_id": aid, "score": 10})
+    assert res2.status_code == 409
+    assert "error" in res2.get_json()</code></pre>
+
+<h3>6.3 List grades returns assignment info</h3>
+<pre><code>def test_list_grades_includes_assignment(client):
+    a = client.post("/assignments", json={"title": "HW 1", "max_points": 100}).get_json()
+    s = client.post("/students", json={"name": "Ava", "email": "ava@example.com"}).get_json()
+
+    client.post(f"/students/{s['id']}/grades", json={"assignment_id": a["id"], "score": 95})
+
+    res = client.get(f"/students/{s['id']}/grades")
+    assert res.status_code == 200
+    grades = res.get_json()
+    assert len(grades) == 1
+    assert grades[0]["assignment"]["title"] == "HW 1"</code></pre>
+
+<h2>7) Extra pytest tips that help a lot in Flask projects</h2>
+
+<h3>7.1 Use clear test names and structure</h3>
+<ul>
+    <li>Name tests like <code>test_create_student_missing_fields</code> so failure output is self-explanatory.</li>
+    <li>Keep tests short: arrange → act → assert.</li>
+</ul>
+
+<h3>7.2 Prefer in-memory databases for unit tests</h3>
+<p>
+    Use <code>sqlite:///:memory:</code> so each run is isolated and fast.
+</p>
+
+<h3>7.3 If a test fails, print response to debug</h3>
+<pre><code>res = client.post("/students", json={...})
+print(res.status_code, res.get_json())</code></pre>
+
+<h3>7.4 Don't forget rollback patterns in app code</h3>
+<p>
+    If a commit fails (constraint violation), always rollback the session.
+    If you don’t, the session can remain in a broken state and future operations may fail.
+</p>
+
+<hr/>
+<p class="small">
+    Next steps: migrations (Flask-Migrate/Alembic), eager loading to avoid N+1, and more relationship types (many-to-many).
+</p>
+
+</body>
+</html>
