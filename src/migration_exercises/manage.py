@@ -5,8 +5,9 @@ app = create_app()
 # Import db and models here so Flask-Migrate can detect them.
 #
 # Example:
-# from .extensions import db
-# from .models import Student, Assignment, Grade
+from .extensions import db
+from .models import Student, Assignment, Grade
+
 
 
 if __name__ == "__main__":
